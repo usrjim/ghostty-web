@@ -384,8 +384,8 @@ export class InputHandler {
       }
     }
 
-    // Allow Ctrl+V and Cmd+V to trigger paste event (don't preventDefault)
-    if ((event.ctrlKey || event.metaKey) && event.code === 'KeyV') {
+    // Allow Cmd+V to trigger paste event (don't preventDefault)
+    if (event.metaKey && event.code === 'KeyV') {
       // Let the browser's native paste event fire
       return;
     }
