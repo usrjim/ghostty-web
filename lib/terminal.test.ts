@@ -2388,35 +2388,6 @@ describe('Options Proxy handleOptionChange', () => {
     term.dispose();
   });
 
-  test('changing cursorBlink starts/stops blink timer', async () => {
-    if (!container) return;
-
-    const term = await createIsolatedTerminal({ cursorBlink: false });
-    term.open(container);
-
-    // Verify initial state
-    expect(term.options.cursorBlink).toBe(false);
-
-    // Enable cursor blink
-    term.options.cursorBlink = true;
-    expect(term.options.cursorBlink).toBe(true);
-
-    // @ts-ignore - accessing private for test
-    const renderer = term.renderer;
-    // @ts-ignore - accessing private for test
-    expect(renderer.cursorBlink).toBe(true);
-    // @ts-ignore - accessing private for test
-    expect(renderer.cursorBlinkInterval).toBeDefined();
-
-    // Disable cursor blink
-    term.options.cursorBlink = false;
-    expect(term.options.cursorBlink).toBe(false);
-    // @ts-ignore - accessing private for test
-    expect(renderer.cursorBlink).toBe(false);
-
-    term.dispose();
-  });
-
   test('changing cols/rows triggers resize', async () => {
     if (!container) return;
 

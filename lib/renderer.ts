@@ -7,7 +7,7 @@
  * - Full color support (256-color palette + RGB)
  * - All text styles (bold, italic, underline, strikethrough, etc.)
  * - Multiple cursor styles (block, underline, bar)
- * - Dirty line optimization for 60 FPS
+ * - Dirty line optimization for efficient rendering
  */
 
 import type { ITheme } from './interfaces';
@@ -45,7 +45,6 @@ export interface RendererOptions {
   fontSize?: number; // Default: 15
   fontFamily?: string; // Default: 'monospace'
   cursorStyle?: 'block' | 'underline' | 'bar'; // Default: 'block'
-  cursorBlink?: boolean; // Default: false
   theme?: ITheme;
   devicePixelRatio?: number; // Default: window.devicePixelRatio
 }
@@ -97,16 +96,17 @@ export class CanvasRenderer {
   private fontSize: number;
   private fontFamily: string;
   private cursorStyle: 'block' | 'underline' | 'bar';
-  private cursorBlink: boolean;
   private theme: Required<ITheme>;
   private devicePixelRatio: number;
   private metrics: FontMetrics;
   private palette: string[];
 
-  // Cursor blinking state
-  private cursorVisible: boolean = true;
-  private cursorBlinkInterval?: number;
+  // Cursor state
   private lastCursorPosition: { x: number; y: number } = { x: 0, y: 0 };
+
+  // Event-driven render scheduling
+  private rafHandle?: number;
+  private renderCallback?: () => void;
 
   // Viewport tracking (for scrolling)
   private lastViewportY: number = 0;
@@ -150,7 +150,6 @@ export class CanvasRenderer {
     this.fontSize = options.fontSize ?? 15;
     this.fontFamily = options.fontFamily ?? 'monospace';
     this.cursorStyle = options.cursorStyle ?? 'block';
-    this.cursorBlink = options.cursorBlink ?? false;
     this.theme = { ...DEFAULT_THEME, ...options.theme };
     this.devicePixelRatio = options.devicePixelRatio ?? window.devicePixelRatio ?? 1;
 
@@ -177,10 +176,6 @@ export class CanvasRenderer {
     // Measure font metrics
     this.metrics = this.measureFont();
 
-    // Setup cursor blinking if enabled
-    if (this.cursorBlink) {
-      this.startCursorBlink();
-    }
   }
 
   // ==========================================================================
@@ -304,7 +299,7 @@ export class CanvasRenderer {
     // Check if cursor position changed or if blinking (need to redraw cursor line)
     const cursorMoved =
       cursor.x !== this.lastCursorPosition.x || cursor.y !== this.lastCursorPosition.y;
-    if (cursorMoved || this.cursorBlink) {
+    if (cursorMoved) {
       // Mark cursor lines as needing redraw
       if (!forceAll && !buffer.isRowDirty(cursor.y)) {
         // Need to redraw cursor line
@@ -484,7 +479,7 @@ export class CanvasRenderer {
     // Link underlines are drawn during cell rendering (see renderCell)
 
     // Render cursor (only if we're at the bottom, not scrolled)
-    if (viewportY === 0 && cursor.visible && this.cursorVisible) {
+    if (viewportY === 0 && cursor.visible) {
       this.renderCursor(cursor.x, cursor.y);
     }
 
@@ -742,26 +737,6 @@ export class CanvasRenderer {
   }
 
   // ==========================================================================
-  // Cursor Blinking
-  // ==========================================================================
-
-  private startCursorBlink(): void {
-    // xterm.js uses ~530ms blink interval
-    this.cursorBlinkInterval = window.setInterval(() => {
-      this.cursorVisible = !this.cursorVisible;
-      // Note: Render loop should redraw cursor line automatically
-    }, 530);
-  }
-
-  private stopCursorBlink(): void {
-    if (this.cursorBlinkInterval !== undefined) {
-      clearInterval(this.cursorBlinkInterval);
-      this.cursorBlinkInterval = undefined;
-    }
-    this.cursorVisible = true;
-  }
-
-  // ==========================================================================
   // Public API
   // ==========================================================================
 
@@ -813,19 +788,6 @@ export class CanvasRenderer {
    */
   public setCursorStyle(style: 'block' | 'underline' | 'bar'): void {
     this.cursorStyle = style;
-  }
-
-  /**
-   * Enable/disable cursor blinking
-   */
-  public setCursorBlink(enabled: boolean): void {
-    if (enabled && !this.cursorBlink) {
-      this.cursorBlink = true;
-      this.startCursorBlink();
-    } else if (!enabled && this.cursorBlink) {
-      this.cursorBlink = false;
-      this.stopCursorBlink();
-    }
   }
 
   /**
@@ -971,9 +933,39 @@ export class CanvasRenderer {
   }
 
   /**
+   * Register the callback invoked on each scheduled render frame.
+   * The terminal should use this instead of a continuous RAF loop.
+   */
+  public setRenderCallback(cb: () => void): void {
+    this.renderCallback = cb;
+  }
+
+  /**
+   * Schedule a single render frame (event-driven).
+   * Safe to call multiple times — only one RAF is queued at a time.
+   */
+  public scheduleRender(): void {
+    if (this.rafHandle !== undefined) return;
+    this.rafHandle = requestAnimationFrame(() => {
+      this.rafHandle = undefined;
+      this.renderCallback?.();
+    });
+  }
+
+  /**
+   * Cancel any pending scheduled render.
+   */
+  public cancelScheduledRender(): void {
+    if (this.rafHandle !== undefined) {
+      cancelAnimationFrame(this.rafHandle);
+      this.rafHandle = undefined;
+    }
+  }
+
+  /**
    * Cleanup resources
    */
   public dispose(): void {
-    this.stopCursorBlink();
+    this.cancelScheduledRender();
   }
 }

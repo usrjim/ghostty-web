@@ -100,7 +100,6 @@ export class Terminal implements ITerminalCore {
   // Lifecycle state
   private isOpen = false;
   private isDisposed = false;
-  private animationFrameId?: number;
 
   // Addons
   private addons: ITerminalAddon[] = [];
@@ -140,7 +139,6 @@ export class Terminal implements ITerminalCore {
     const baseOptions = {
       cols: options.cols ?? 80,
       rows: options.rows ?? 24,
-      cursorBlink: options.cursorBlink ?? false,
       cursorStyle: options.cursorStyle ?? 'block',
       theme: options.theme ?? {},
       scrollback: options.scrollback ?? 10000,
@@ -191,11 +189,9 @@ export class Terminal implements ITerminalCore {
         // No action needed
         break;
 
-      case 'cursorBlink':
       case 'cursorStyle':
         if (this.renderer) {
           this.renderer.setCursorStyle(this.options.cursorStyle);
-          this.renderer.setCursorBlink(this.options.cursorBlink);
         }
         break;
 
@@ -418,7 +414,6 @@ export class Terminal implements ITerminalCore {
         fontSize: this.options.fontSize,
         fontFamily: this.options.fontFamily,
         cursorStyle: this.options.cursorStyle,
-        cursorBlink: this.options.cursorBlink,
         theme: this.options.theme,
       });
 
@@ -489,6 +484,7 @@ export class Terminal implements ITerminalCore {
       // Forward selection change events
       this.selectionManager.onSelectionChange(() => {
         this.selectionChangeEmitter.fire();
+        this.scheduleRender();
       });
 
       // Initialize link detection system
@@ -587,7 +583,8 @@ export class Terminal implements ITerminalCore {
       requestAnimationFrame(callback);
     }
 
-    // Render will happen on next animation frame
+    // Schedule a render for the new data
+    this.scheduleRender();
   }
 
   /**
@@ -902,6 +899,9 @@ export class Terminal implements ITerminalCore {
       if (scrollbackLength > 0) {
         this.showScrollbar();
       }
+
+      // Schedule render for the new viewport position
+      this.scheduleRender();
     }
   }
 
@@ -1068,12 +1068,6 @@ export class Terminal implements ITerminalCore {
     this.isDisposed = true;
     this.isOpen = false;
 
-    // Stop render loop
-    if (this.animationFrameId) {
-      cancelAnimationFrame(this.animationFrameId);
-      this.animationFrameId = undefined;
-    }
-
     // Stop smooth scroll animation
     if (this.scrollAnimationFrame) {
       cancelAnimationFrame(this.scrollAnimationFrame);
@@ -1116,31 +1110,29 @@ export class Terminal implements ITerminalCore {
    * Start the render loop
    */
   private startRenderLoop(): void {
-    const loop = () => {
+    // Event-driven: register the render callback once.
+    // Renders are triggered by scheduleRender() calls from write(), resize(),
+    // scroll, selection and mouse-hover changes — not a continuous RAF loop.
+    this.renderer!.setRenderCallback(() => {
       if (!this.isDisposed && this.isOpen) {
-        // Render using WASM's native dirty tracking
-        // The render() method:
-        // 1. Calls update() once to sync state and check dirty flags
-        // 2. Only redraws dirty rows when forceAll=false
-        // 3. Always calls clearDirty() at the end
         this.renderer!.render(this.wasmTerm!, false, this.viewportY, this, this.scrollbarOpacity);
 
-        // Check for cursor movement (Phase 2: onCursorMove event)
-        // Note: getCursor() reads from already-updated render state (from render() above)
+        // Check for cursor movement
         const cursor = this.wasmTerm!.getCursor();
         if (cursor.y !== this.lastCursorY) {
           this.lastCursorY = cursor.y;
           this.cursorMoveEmitter.fire();
         }
-
-        // Note: onRender event is intentionally not fired in the render loop
-        // to avoid performance issues. For now, consumers can use requestAnimationFrame
-        // if they need frame-by-frame updates.
-
-        this.animationFrameId = requestAnimationFrame(loop);
       }
-    };
-    loop();
+    });
+  }
+
+  /**
+   * Schedule a single render on the next animation frame.
+   * Safe to call multiple times — only one frame is ever queued at a time.
+   */
+  private scheduleRender(): void {
+    this.renderer?.scheduleRender();
   }
 
   /**
@@ -1332,9 +1324,7 @@ export class Terminal implements ITerminalCore {
     const previousHyperlinkId = (this.renderer as any).hoveredHyperlinkId || 0;
     if (hyperlinkId !== previousHyperlinkId) {
       this.renderer.setHoveredHyperlinkId(hyperlinkId);
-
-      // The 60fps render loop will pick up the change automatically
-      // No need to force a render - this keeps performance smooth
+      this.scheduleRender();
     }
 
     // Check if there's a link at this position (for click handling and cursor)
@@ -1409,6 +1399,7 @@ export class Terminal implements ITerminalCore {
             } else {
               this.renderer.setHoveredLinkRange(null);
             }
+            this.scheduleRender();
           }
         }
       })
@@ -1426,11 +1417,10 @@ export class Terminal implements ITerminalCore {
       const previousHyperlinkId = (this.renderer as any).hoveredHyperlinkId || 0;
       if (previousHyperlinkId > 0) {
         this.renderer.setHoveredHyperlinkId(0);
-
-        // The 60fps render loop will pick up the change automatically
       }
       // Clear regex link underline
       this.renderer.setHoveredLinkRange(null);
+      this.scheduleRender();
     }
 
     if (this.currentHoveredLink) {
