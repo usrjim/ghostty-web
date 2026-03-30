@@ -402,6 +402,25 @@ export class InputHandler {
       return;
     }
 
+    // Special handling for Alt (Option) on macOS: send ESC + base character for Alt+Key combos
+    if (
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      event.code.startsWith('Key') &&
+      event.key.length === 1
+    ) {
+      // Map event.code 'KeyB' to 'b' or 'B' depending on shift
+      const baseChar = event.shiftKey
+        ? event.code.slice(3, 4).toUpperCase()
+        : event.code.slice(3, 4).toLowerCase();
+      const escSeq = '\x1b' + baseChar;
+      event.preventDefault();
+      this.onDataCallback(escSeq);
+      this.recordKeyDownData(escSeq);
+      return;
+    }
+
     // For printable characters without modifiers, send the character directly
     // This handles: a-z, A-Z (with shift), 0-9, punctuation, etc.
     if (this.isPrintableCharacter(event)) {
