@@ -390,6 +390,43 @@ export class InputHandler {
       return;
     }
 
+    // Ctrl+/ (for Emacs undo, Kitty/Emacs mapping) => ESC [1;5/
+    // event.code === 'Slash', event.ctrlKey === true, event.key === '/'
+    if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Slash') {
+      const seq = '\x1b[1;5/';
+      event.preventDefault();
+      this.onDataCallback(seq);
+      this.recordKeyDownData(seq);
+      return;
+    }
+
+    // Ctrl+< (Emacs/Kitty mapping) => ESC [1;5<
+    if (event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && event.code === 'Comma' && event.key === ',') {
+      const seq = '\x1b[1;5<';
+      event.preventDefault();
+      this.onDataCallback(seq);
+      this.recordKeyDownData(seq);
+      return;
+    }
+
+    // Ctrl+> (Emacs/Kitty mapping) => ESC [1;5>
+    if (event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && event.code === 'Period' && event.key === '.') {
+      const seq = '\x1b[1;5>';
+      event.preventDefault();
+      this.onDataCallback(seq);
+      this.recordKeyDownData(seq);
+      return;
+    }
+
+    // Alt+Backslash (M-\) => ESC [1;3\
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.code === 'Backslash' && event.key === "«") {
+      const seq = '\x1b[1;3\\';
+      event.preventDefault();
+      this.onDataCallback(seq);
+      this.recordKeyDownData(seq);
+      return;
+    }
+
     // Handle Cmd+C for copy (on Mac, Cmd+C should copy, not send interrupt)
     // Note: Ctrl+C on all platforms sends interrupt signal (0x03)
     if (event.metaKey && event.code === 'KeyC') {
