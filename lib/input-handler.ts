@@ -390,7 +390,7 @@ export class InputHandler {
       return;
     }
 
-    // Super+<letter> (Cmd+Letter, with or without Shift) → ESC [1;7<letter> (Emacs input-decode-map)
+    // Super+<letter>
     if (
       event.metaKey &&
       !event.ctrlKey &&
@@ -408,8 +408,7 @@ export class InputHandler {
       return;
     }
 
-    // Ctrl+/ (for Emacs undo, Kitty/Emacs mapping) => ESC [1;5/
-    // event.code === 'Slash', event.ctrlKey === true, event.key === '/'
+    // Ctrl+/
     if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Slash') {
       const seq = '\x1b[1;5/';
       event.preventDefault();
@@ -418,7 +417,7 @@ export class InputHandler {
       return;
     }
 
-    // Ctrl+< (Emacs/Kitty mapping) => ESC [1;5<
+    // Ctrl+<
     if (event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && event.code === 'Comma') {
       const seq = '\x1b[1;5<';
       event.preventDefault();
@@ -427,7 +426,7 @@ export class InputHandler {
       return;
     }
 
-    // Ctrl+> (Emacs/Kitty mapping) => ESC [1;5>
+    // Ctrl+>
     if (event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && event.code === 'Period') {
       const seq = '\x1b[1;5>';
       event.preventDefault();
@@ -436,7 +435,25 @@ export class InputHandler {
       return;
     }
 
-    // Alt+< (Emacs/Kitty mapping) => ESC [1;3<
+    // Ctrl+,
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.code === 'Comma') {
+      const seq = '\x1b[1;5,';
+      event.preventDefault();
+      this.onDataCallback(seq);
+      this.recordKeyDownData(seq);
+      return;
+    }
+
+    // Ctrl+<tab>
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.code === 'Tab') {
+      const seq = '\x1b[1;5I';
+      event.preventDefault();
+      this.onDataCallback(seq);
+      this.recordKeyDownData(seq);
+      return;
+    }
+
+    // Alt+<
     if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === 'Comma') {
       const seq = '\x1b[1;3<';
       event.preventDefault();
@@ -445,7 +462,7 @@ export class InputHandler {
       return;
     }
 
-    // Alt+> (Emacs/Kitty mapping) => ESC [1;3>
+    // Alt+>
     if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === 'Period') {
       const seq = '\x1b[1;3>';
       event.preventDefault();
@@ -454,7 +471,7 @@ export class InputHandler {
       return;
     }
 
-    // Alt+/ => ESC [1;3/
+    // Alt+/
     if (event.altKey && !event.ctrlKey && !event.metaKey && event.code === 'Slash') {
       const seq = '\x1b[1;3/';
       event.preventDefault();
@@ -463,7 +480,7 @@ export class InputHandler {
       return;
     }
 
-    // Alt+Backslash (M-\) => ESC [1;3\
+    // Alt+Backslash (M-\)
     if (event.altKey && !event.ctrlKey && !event.metaKey && event.code === 'Backslash') {
       const seq = '\x1b[1;3\\';
       event.preventDefault();
