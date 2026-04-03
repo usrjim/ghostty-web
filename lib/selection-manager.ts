@@ -59,6 +59,9 @@ export class SelectionManager {
   private boundClickHandler: ((e: MouseEvent) => void) | null = null;
   private boundDocumentMouseMoveHandler: ((e: MouseEvent) => void) | null = null;
 
+  // Custom context menu element
+  private contextMenuElement: HTMLDivElement | null = null;
+
   // Auto-scroll state for drag selection
   private autoScrollInterval: ReturnType<typeof setInterval> | null = null;
   private autoScrollDirection: number = 0; // -1 = up, 0 = none, 1 = down
@@ -417,12 +420,125 @@ export class SelectionManager {
       this.boundClickHandler = null;
     }
 
+    // Remove custom context menu if visible
+    this.hideCustomContextMenu();
+
     // Canvas event listeners will be cleaned up when canvas is removed from DOM
   }
 
   // ==========================================================================
   // Private Methods
   // ==========================================================================
+
+  /**
+   * Show a custom context menu at the given viewport coordinates.
+   * Provides Copy (when text is selected) and Paste menu items.
+   */
+  private showCustomContextMenu(x: number, y: number): void {
+    this.hideCustomContextMenu();
+
+    const menu = document.createElement('div');
+    this.contextMenuElement = menu;
+
+    Object.assign(menu.style, {
+      position: 'fixed',
+      left: `${x}px`,
+      top: `${y}px`,
+      background: '#1e1e1e',
+      border: '1px solid #454545',
+      borderRadius: '4px',
+      padding: '4px 0',
+      zIndex: '10000',
+      minWidth: '140px',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+      font: '13px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+      color: '#d4d4d4',
+      userSelect: 'none',
+      cursor: 'default',
+    });
+
+    const makeItem = (
+      label: string,
+      enabled: boolean,
+      onClick: () => void
+    ): HTMLDivElement => {
+      const item = document.createElement('div');
+      item.textContent = label;
+      Object.assign(item.style, {
+        padding: '6px 20px',
+        color: enabled ? '#d4d4d4' : '#666',
+        cursor: enabled ? 'pointer' : 'default',
+      });
+      if (enabled) {
+        item.addEventListener('mouseover', () => {
+          item.style.background = '#094771';
+        });
+        item.addEventListener('mouseout', () => {
+          item.style.background = '';
+        });
+        // Use mousedown so the action fires before the blur/click dismissal
+        item.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          this.hideCustomContextMenu();
+          onClick();
+        });
+      }
+      return item;
+    };
+
+    const hasSelection = this.hasSelection();
+    menu.appendChild(
+      makeItem('Copy', hasSelection, () => {
+        this.copySelection();
+      })
+    );
+
+    menu.appendChild(
+      makeItem('Paste', true, () => {
+        navigator.clipboard
+          .readText()
+          .then((text) => {
+            if (text) this.terminal.paste(text);
+          })
+          .catch(() => {
+            // Clipboard read permission denied — silently ignore
+          });
+      })
+    );
+
+    document.body.appendChild(menu);
+
+    // Clamp menu to viewport so it doesn't appear partially off-screen
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+      menu.style.left = `${x - rect.width}px`;
+    }
+    if (rect.bottom > window.innerHeight) {
+      menu.style.top = `${y - rect.height}px`;
+    }
+
+    // Dismiss the menu when the user clicks anywhere outside it
+    const onOutsideMousedown = (e: MouseEvent) => {
+      if (!menu.contains(e.target as Node)) {
+        this.hideCustomContextMenu();
+        document.removeEventListener('mousedown', onOutsideMousedown, true);
+      }
+    };
+    // Use capture so we receive the event before potential stopPropagation callers
+    setTimeout(() => {
+      document.addEventListener('mousedown', onOutsideMousedown, true);
+    }, 0);
+  }
+
+  /**
+   * Remove the custom context menu from the DOM.
+   */
+  private hideCustomContextMenu(): void {
+    if (this.contextMenuElement) {
+      this.contextMenuElement.remove();
+      this.contextMenuElement = null;
+    }
+  }
 
   /**
    * Attach mouse event listeners to canvas
@@ -552,7 +668,7 @@ export class SelectionManager {
 
         const text = this.getSelection();
         if (text) {
-          this.copyToClipboard(text);
+          // this.copyToClipboard(text);
           this.selectionChangedEmitter.fire();
         }
       }
@@ -572,70 +688,20 @@ export class SelectionManager {
 
         const text = this.getSelection();
         if (text) {
-          this.copyToClipboard(text);
+          // this.copyToClipboard(text);
           this.selectionChangedEmitter.fire();
         }
       }
     });
 
-    // Right-click (context menu) - position textarea to show browser's native menu
-    // This allows Copy/Paste options to appear in the context menu
+    // Right-click (context menu) - show custom menu with Copy/Paste
+    // We cannot rely on the browser's native context menu here: right-click lands on
+    // the canvas, which the browser treats as an image element, so it offers
+    // "Copy Image" and grays out "Copy". Preventing the default and showing our
+    // own menu is the only reliable cross-browser way to enable text Copy.
     this.boundContextMenuHandler = (e: MouseEvent) => {
-      // Position textarea at mouse cursor
-      const canvas = this.renderer.getCanvas();
-      const rect = canvas.getBoundingClientRect();
-
-      this.textarea.style.position = 'fixed';
-      this.textarea.style.left = `${e.clientX}px`;
-      this.textarea.style.top = `${e.clientY}px`;
-      this.textarea.style.width = '1px';
-      this.textarea.style.height = '1px';
-      this.textarea.style.zIndex = '1000';
-      this.textarea.style.opacity = '0';
-
-      // Enable pointer events temporarily so context menu targets the textarea
-      this.textarea.style.pointerEvents = 'auto';
-
-      // If there's a selection, populate textarea with it and select the text
-      if (this.hasSelection()) {
-        const text = this.getSelection();
-        this.textarea.value = text;
-        this.textarea.select();
-        this.textarea.setSelectionRange(0, text.length);
-      } else {
-        // No selection - clear textarea but still show menu (for paste)
-        this.textarea.value = '';
-      }
-
-      // Focus the textarea so the context menu appears on it
-      this.textarea.focus();
-
-      // After a short delay, restore the textarea to its hidden state
-      // This allows the context menu to appear first
-      setTimeout(() => {
-        // Listen for when the context menu closes (user clicks away or selects an option)
-        const resetTextarea = () => {
-          this.textarea.style.pointerEvents = 'none';
-          this.textarea.style.zIndex = '-10';
-          this.textarea.style.width = '0';
-          this.textarea.style.height = '0';
-          this.textarea.style.left = '0';
-          this.textarea.style.top = '0';
-          this.textarea.value = '';
-
-          // Remove the one-time listeners
-          document.removeEventListener('click', resetTextarea);
-          document.removeEventListener('contextmenu', resetTextarea);
-          this.textarea.removeEventListener('blur', resetTextarea);
-        };
-
-        // Reset on any of these events (menu closed)
-        document.addEventListener('click', resetTextarea, { once: true });
-        document.addEventListener('contextmenu', resetTextarea, { once: true });
-        this.textarea.addEventListener('blur', resetTextarea, { once: true });
-      }, 10);
-
-      // Don't prevent default - let browser show the context menu on the textarea
+      e.preventDefault();
+      this.showCustomContextMenu(e.clientX, e.clientY);
     };
 
     canvas.addEventListener('contextmenu', this.boundContextMenuHandler);
