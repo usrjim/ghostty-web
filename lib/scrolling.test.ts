@@ -166,6 +166,146 @@ describe('Terminal Scrolling', () => {
       // Should cap at 5 arrows
       expect(dataSent.length).toBeLessThanOrEqual(5);
     });
+
+    test('should use SS3 arrows (ESC O A/B) when DECCKM is set', () => {
+      // Enter alternate screen + application cursor keys (DECSET 1)
+      terminal.write('\x1b[?1049h');
+      terminal.write('\x1b[?1h');
+
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+
+      container.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true })
+      );
+
+      // Application cursor mode sends SS3-encoded arrows
+      expect(dataSent.length).toBeGreaterThan(0);
+      expect(dataSent.every((data) => data === '\x1BOA')).toBe(true);
+    });
+  });
+
+  describe('Mouse Tracking Wheel Reports', () => {
+    // When the application enables mouse reporting, the wheel must be
+    // reported as mouse button 64/65 (SGR when mode 1006 is set), not as
+    // arrow keys. Apps like vim, tmux, and opencode scroll via these reports.
+    const WHEEL_SGR = /^\x1b\[<6[45];\d+;\d+M$/;
+
+    test('should report wheel as SGR mouse button 64/65 when tracking is on', () => {
+      // Enable SGR mouse tracking (what vim/tmux/opencode do)
+      terminal.write('\x1b[?1000h\x1b[?1006h');
+      expect(terminal.wasmTerm?.hasMouseTracking()).toBe(true);
+
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+
+      container.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true })
+      );
+
+      expect(dataSent.length).toBeGreaterThan(0);
+      expect(dataSent[0]).toMatch(WHEEL_SGR);
+      expect(dataSent[0]).toContain(';64;'); // wheel up button
+    });
+
+    test('should report wheel down as button 65', () => {
+      terminal.write('\x1b[?1000h\x1b[?1006h');
+
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+
+      container.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true })
+      );
+
+      expect(dataSent.length).toBeGreaterThan(0);
+      expect(dataSent[0]).toMatch(WHEEL_SGR);
+      expect(dataSent[0]).toContain(';65;'); // wheel down button
+    });
+
+    test('should send one mouse report per wheel event, not a burst', () => {
+      terminal.write('\x1b[?1000h\x1b[?1006h');
+
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+
+      container.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -1000, bubbles: true, cancelable: true })
+      );
+
+      // Mouse tracking delivers a single report per wheel event; the
+      // application decides how far to scroll. (The 1-5 arrow burst only
+      // applies to the alternate-screen fallback without mouse tracking.)
+      expect(dataSent.length).toBe(1);
+    });
+
+    test('wheel reports win over arrow keys even in alternate screen', () => {
+      // Alternate screen + mouse tracking (opencode's exact configuration)
+      terminal.write('\x1b[?1049h\x1b[?1000h\x1b[?1006h');
+      expect(terminal.wasmTerm?.isAlternateScreen()).toBe(true);
+      expect(terminal.wasmTerm?.hasMouseTracking()).toBe(true);
+
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+
+      container.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true })
+      );
+
+      expect(dataSent.length).toBeGreaterThan(0);
+      expect(dataSent[0]).toMatch(WHEEL_SGR);
+      expect(dataSent).not.toContain('\x1B[A');
+    });
+
+    test('should not scroll viewport when mouse tracking is on', () => {
+      for (let i = 0; i < 50; i++) {
+        terminal.write(`Line ${i}\r\n`);
+      }
+      terminal.write('\x1b[?1000h\x1b[?1006h');
+
+      const initialViewportY = terminal.viewportY;
+
+      container.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true })
+      );
+
+      // Wheel belongs to the application, not local scrollback
+      expect(terminal.viewportY).toBe(initialViewportY);
+    });
+
+    test('legacy X10 encoding (no mode 1006) reports wheel without SGR', () => {
+      // Only mode 1000: fall back to X10 encoding (ESC [ M ...)
+      terminal.write('\x1b[?1000h');
+      expect(terminal.wasmTerm?.hasMouseTracking()).toBe(true);
+
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+
+      container.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true })
+      );
+
+      // X10 wheel-up press: button 64+32=96 (0x60 '`')
+      expect(dataSent.length).toBe(1);
+      expect(dataSent[0]).toMatch(/^\x1b\[M/);
+      expect(dataSent[0].charCodeAt(3)).toBe(96);
+    });
+
+    test('arrow-key fallback resumes after tracking is disabled', () => {
+      terminal.write('\x1b[?1049h\x1b[?1000h\x1b[?1006h');
+      terminal.write('\x1b[?1000l\x1b[?1006l');
+      expect(terminal.wasmTerm?.hasMouseTracking()).toBe(false);
+
+      const dataSent: string[] = [];
+      terminal.onData((data) => dataSent.push(data));
+
+      container.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true })
+      );
+
+      expect(dataSent.length).toBeGreaterThan(0);
+      expect(dataSent[0]).toBe('\x1B[A');
+    });
   });
 
   describe('Mode Transitions', () => {

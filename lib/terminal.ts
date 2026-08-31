@@ -1497,6 +1497,16 @@ export class Terminal implements ITerminalCore {
       return;
     }
 
+    // If the application enabled mouse reporting (DECSET 1000/1002/1003),
+    // the wheel must be reported as mouse button 64 (up) / 65 (down) —
+    // SGR-encoded when mode 1006 is set. Applications like vim, tmux and
+    // opencode scroll via these wheel reports; converting to arrow keys
+    // here breaks their scrolling.
+    if (this.wasmTerm?.hasMouseTracking()) {
+      this.inputHandler?.handleWheel(e);
+      return;
+    }
+
     // Check if in alternate screen mode (vim, less, htop, etc.)
     const isAltScreen = this.wasmTerm?.isAlternateScreen() ?? false;
 
@@ -1507,11 +1517,16 @@ export class Terminal implements ITerminalCore {
       const direction = e.deltaY > 0 ? 'down' : 'up';
       const count = Math.min(Math.abs(Math.round(e.deltaY / 33)), 5); // Cap at 5
 
+      // DECCKM (mode 1): application cursor keys use SS3 (ESC O A/B)
+      const appCursorMode = this.wasmTerm?.getMode(1, false) ?? false;
+      const arrowUp = appCursorMode ? '\x1BOA' : '\x1B[A';
+      const arrowDown = appCursorMode ? '\x1BOB' : '\x1B[B';
+
       for (let i = 0; i < count; i++) {
         if (direction === 'up') {
-          this.dataEmitter.fire('\x1B[A'); // Up arrow
+          this.dataEmitter.fire(arrowUp); // Up arrow
         } else {
-          this.dataEmitter.fire('\x1B[B'); // Down arrow
+          this.dataEmitter.fire(arrowDown); // Down arrow
         }
       }
     } else {

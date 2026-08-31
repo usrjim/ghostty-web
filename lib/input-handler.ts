@@ -193,7 +193,6 @@ export class InputHandler {
   private mousedownListener: ((e: MouseEvent) => void) | null = null;
   private mouseupListener: ((e: MouseEvent) => void) | null = null;
   private mousemoveListener: ((e: MouseEvent) => void) | null = null;
-  private wheelListener: ((e: WheelEvent) => void) | null = null;
   private isComposing = false;
   private isDisposed = false;
   private mouseButtonsPressed = 0; // Track which buttons are pressed for motion reporting
@@ -307,8 +306,11 @@ export class InputHandler {
     this.mousemoveListener = this.handleMouseMove.bind(this);
     this.container.addEventListener('mousemove', this.mousemoveListener);
 
-    this.wheelListener = this.handleWheel.bind(this);
-    this.container.addEventListener('wheel', this.wheelListener, { passive: false });
+    // Wheel events are NOT self-attached: Terminal intercepts wheel in the
+    // capture phase and delegates to handleWheel() when the application has
+    // enabled mouse tracking. Self-attaching here as well would send duplicate
+    // reports when the event target is the container itself (at-target listeners
+    // fire in registration order).
   }
 
   /**
@@ -1007,8 +1009,12 @@ export class InputHandler {
 
   /**
    * Handle wheel event (scroll)
+   *
+   * Public: Terminal delegates wheel events here when the application has
+   * enabled mouse tracking, so wheel input is reported as mouse button 64/65
+   * (SGR) instead of arrow keys.
    */
-  private handleWheel(event: WheelEvent): void {
+  handleWheel(event: WheelEvent): void {
     if (this.isDisposed) return;
     if (!this.mouseConfig?.hasMouseTracking()) return;
 
@@ -1205,11 +1211,6 @@ export class InputHandler {
     if (this.mousemoveListener) {
       this.container.removeEventListener('mousemove', this.mousemoveListener);
       this.mousemoveListener = null;
-    }
-
-    if (this.wheelListener) {
-      this.container.removeEventListener('wheel', this.wheelListener);
-      this.wheelListener = null;
     }
 
     this.isDisposed = true;
