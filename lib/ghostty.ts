@@ -37,6 +37,17 @@ export {
 };
 
 /**
+ * Options for loading the Ghostty WASM module.
+ */
+export interface GhosttyLoadOptions {
+  /**
+   * When true, internal WASM messages (e.g. parser warnings) are printed
+   * to the console. Defaults to false to keep the console quiet.
+   */
+  debug?: boolean;
+}
+
+/**
  * Main Ghostty WASM wrapper class
  */
 export class Ghostty {
@@ -60,10 +71,10 @@ export class Ghostty {
     return new GhosttyTerminal(this.exports, this.memory, cols, rows, config);
   }
 
-  static async load(wasmPath?: string): Promise<Ghostty> {
+  static async load(wasmPath?: string, options?: GhosttyLoadOptions): Promise<Ghostty> {
     // If explicit path provided, use it
     if (wasmPath) {
-      return Ghostty.loadFromPath(wasmPath);
+      return Ghostty.loadFromPath(wasmPath, options);
     }
 
     // Resolve path relative to this module
@@ -88,7 +99,7 @@ export class Ghostty {
     let lastError: Error | null = null;
     for (const path of defaultPaths) {
       try {
-        return await Ghostty.loadFromPath(path);
+        return await Ghostty.loadFromPath(path, options);
       } catch (e) {
         lastError = e instanceof Error ? e : new Error(String(e));
       }
@@ -96,7 +107,7 @@ export class Ghostty {
     throw lastError || new Error('Failed to load Ghostty WASM');
   }
 
-  private static async loadFromPath(path: string): Promise<Ghostty> {
+  private static async loadFromPath(path: string, options?: GhosttyLoadOptions): Promise<Ghostty> {
     let wasmBytes: ArrayBuffer | undefined;
 
     // Try Bun.file first (for Bun environments)
@@ -142,6 +153,9 @@ export class Ghostty {
     const wasmInstance = await WebAssembly.instantiate(wasmModule, {
       env: {
         log: (ptr: number, len: number) => {
+          // Internal WASM messages (parser warnings, etc.) are noisy;
+          // only print them when explicitly requested via { debug: true }.
+          if (!options?.debug) return;
           const bytes = new Uint8Array(
             (wasmInstance.exports as GhosttyWasmExports).memory.buffer,
             ptr,
