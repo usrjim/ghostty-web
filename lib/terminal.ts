@@ -922,6 +922,7 @@ export class Terminal implements ITerminalCore {
       this.viewportY = scrollbackLength;
       this.scrollEmitter.fire(this.viewportY);
       this.showScrollbar();
+      this.scheduleRender();
     }
   }
 
@@ -936,6 +937,7 @@ export class Terminal implements ITerminalCore {
       if (this.getScrollbackLength() > 0) {
         this.showScrollbar();
       }
+      this.scheduleRender();
     }
   }
 
@@ -955,6 +957,7 @@ export class Terminal implements ITerminalCore {
       if (scrollbackLength > 0) {
         this.showScrollbar();
       }
+      this.scheduleRender();
     }
   }
 
@@ -981,6 +984,7 @@ export class Terminal implements ITerminalCore {
       if (scrollbackLength > 0) {
         this.showScrollbar();
       }
+      this.scheduleRender();
       return;
     }
 
@@ -1025,6 +1029,9 @@ export class Terminal implements ITerminalCore {
         this.showScrollbar();
       }
 
+      // Schedule render for the final viewport position
+      this.scheduleRender();
+
       // Animation complete
       this.scrollAnimationFrame = undefined;
       this.scrollAnimationStartTime = undefined;
@@ -1048,6 +1055,9 @@ export class Terminal implements ITerminalCore {
     if (scrollbackLength > 0) {
       this.showScrollbar();
     }
+
+    // Schedule render for the updated viewport position
+    this.scheduleRender();
 
     // Continue animation
     this.scrollAnimationFrame = requestAnimationFrame(this.animateScroll);
