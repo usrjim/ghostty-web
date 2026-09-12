@@ -181,6 +181,7 @@ export class InputHandler {
   private onKeyCallback?: (keyEvent: IKeyEvent) => void;
   private customKeyEventHandler?: (event: KeyboardEvent) => boolean;
   private getModeCallback?: (mode: number) => boolean;
+  private getKittyFlagsCallback?: () => number;
   private onCopyCallback?: () => boolean;
   private mouseConfig?: MouseTrackingConfig;
   private keydownListener: ((e: KeyboardEvent) => void) | null = null;
@@ -219,6 +220,11 @@ export class InputHandler {
    * @param onCopy - Optional callback to handle copy (Cmd+C/Ctrl+C with selection)
    * @param inputElement - Optional input element for beforeinput events
    * @param mouseConfig - Optional mouse tracking configuration
+   * @param getKittyFlags - Optional callback returning active kitty keyboard
+   *   protocol enhancement flags (0 = protocol inactive). When non-zero, keys
+   *   that would otherwise emit legacy `\x1b[1;NX` sequences emit kitty
+   *   CSI-u grammar instead, which kitty-protocol-aware programs (emacs
+   *   kkp-mode, nvim) can decode.
    */
   constructor(
     ghostty: Ghostty,
@@ -230,7 +236,8 @@ export class InputHandler {
     getMode?: (mode: number) => boolean,
     onCopy?: () => boolean,
     inputElement?: HTMLElement,
-    mouseConfig?: MouseTrackingConfig
+    mouseConfig?: MouseTrackingConfig,
+    getKittyFlags?: () => number
   ) {
     this.encoder = ghostty.createKeyEncoder();
     this.container = container;
@@ -242,6 +249,7 @@ export class InputHandler {
     this.getModeCallback = getMode;
     this.onCopyCallback = onCopy;
     this.mouseConfig = mouseConfig;
+    this.getKittyFlagsCallback = getKittyFlags;
 
     // Attach event listeners
     this.attach();
@@ -359,6 +367,87 @@ export class InputHandler {
   }
 
   /**
+   * Try to encode a key event using kitty CSI-u grammar.
+   *
+   * Called only when the program has pushed kitty keyboard enhancement
+   * flags (tracked from terminal output). Such programs (emacs kkp-mode,
+   * nvim) intercept CSI prefixes and cannot parse the legacy `\x1b[1;NX`
+   * sequences emitted by the branches below.
+   *
+   * Handled here (returns true):
+   * - Super (Cmd) + any single printable character  → CSI <cp> ; 9 u
+   * - Ctrl/Alt + single printable non-letter         → CSI <cp> ; <mods> u
+   * - Tab with Ctrl/Alt/Meta (Shift folded into mods)→ CSI 9 ; <mods> u
+   *
+   * Not handled (returns false, falls through to existing paths):
+   * - Ctrl + letter: wasm encoder already emits disambiguated CSI-u
+   *   (e.g. Ctrl+M → \e[109;5u), which kitty programs parse natively
+   * - Alt + letter: ESC + char branch handles it
+   * - Unmodified keys and other special keys
+   *
+   * Modifier parameter is kitty-spec: 1 + (shift=1 | alt=2 | ctrl=4 |
+   * super=8). For printable characters the shifted codepoint itself
+   * encodes shift, so the shift bit is only added for non-printable keys
+   * (Tab).
+   *
+   * @param event - KeyboardEvent
+   * @returns true if the event was encoded and emitted
+   */
+  private tryEmitKittySequence(event: KeyboardEvent): boolean {
+    const hasNonShiftMod = event.ctrlKey || event.altKey || event.metaKey;
+    if (!hasNonShiftMod) return false;
+
+    // Modified Tab: codepoint 9, shift contributes to the modifier param
+    if (event.key === 'Tab') {
+      let param = 1;
+      if (event.shiftKey) param += 1;
+      if (event.altKey) param += 2;
+      if (event.ctrlKey) param += 4;
+      if (event.metaKey) param += 8;
+      this.emitKitty(9, param, event);
+      return true;
+    }
+
+    // Single printable character
+    if (event.key.length === 1) {
+      const cp = event.key.codePointAt(0);
+      if (cp === undefined || cp < 32 || cp > 126) return false;
+      const isLetter = /^[a-zA-Z]$/.test(event.key);
+
+      // Super + any printable (letters, digits, punctuation)
+      if (event.metaKey) {
+        let param = 9;
+        if (event.altKey) param += 2;
+        if (event.ctrlKey) param += 4;
+        this.emitKitty(cp, param, event);
+        return true;
+      }
+
+      // Ctrl/Alt + non-letter printable (punctuation, digits). Letters are
+      // left to the wasm encoder (Ctrl) and ESC+char branch (Alt).
+      if ((event.ctrlKey || event.altKey) && !isLetter) {
+        let param = 1;
+        if (event.altKey) param += 2;
+        if (event.ctrlKey) param += 4;
+        this.emitKitty(cp, param, event);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Emit a kitty CSI-u sequence: CSI <codepoint> ; <mods> u
+   */
+  private emitKitty(codepoint: number, modsParam: number, event: KeyboardEvent): void {
+    const seq = `\x1b[${codepoint};${modsParam}u`;
+    event.preventDefault();
+    this.onDataCallback(seq);
+    this.recordKeyDownData(seq);
+  }
+
+  /**
    * Handle keydown event
    * @param event - KeyboardEvent
    */
@@ -389,6 +478,15 @@ export class InputHandler {
     // Allow Cmd+V to trigger paste event (don't preventDefault)
     if (event.metaKey && event.code === 'KeyV') {
       // Let the browser's native paste event fire
+      return;
+    }
+
+    // Kitty keyboard protocol active: the program pushed enhancement flags
+    // (emacs kkp-mode, nvim) and intercepts CSI prefixes, expecting CSI-u
+    // grammar. Emit kitty-style sequences instead of the legacy `\x1b[1;NX`
+    // forms further below, which such programs cannot parse.
+    const kittyFlags = this.getKittyFlagsCallback?.() ?? 0;
+    if (kittyFlags !== 0 && this.tryEmitKittySequence(event)) {
       return;
     }
 
