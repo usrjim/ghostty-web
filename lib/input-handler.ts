@@ -154,6 +154,38 @@ const KEY_MAP: Record<string, Key> = {
 };
 
 /**
+ * ASCII characters (unshifted, shifted) for punctuation and digit key codes
+ * (US layout). macOS reports unreliable event.key values for modifier
+ * combinations with these keys: Ctrl+Shift+Period reports "." (unshifted)
+ * and Option+Shift+Comma reports "„" (composed). The physical event.code
+ * plus shiftKey is the ground truth, so these codes always resolve through
+ * this map.
+ */
+const PUNCTUATION_CODE_POINTS: Record<string, [string, string]> = {
+  Comma: [',', '<'],
+  Period: ['.', '>'],
+  Slash: ['/', '?'],
+  Backslash: ['\\', '|'],
+  Semicolon: [';', ':'],
+  Quote: ["'", '"'],
+  Backquote: ['`', '~'],
+  BracketLeft: ['[', '{'],
+  BracketRight: [']', '}'],
+  Minus: ['-', '_'],
+  Equal: ['=', '+'],
+  Digit1: ['1', '!'],
+  Digit2: ['2', '@'],
+  Digit3: ['3', '#'],
+  Digit4: ['4', '$'],
+  Digit5: ['5', '%'],
+  Digit6: ['6', '^'],
+  Digit7: ['7', '&'],
+  Digit8: ['8', '*'],
+  Digit9: ['9', '('],
+  Digit0: ['0', ')'],
+};
+
+/**
  * InputHandler class
  * Attaches keyboard event listeners to a container and converts
  * keyboard events to terminal input data
@@ -367,6 +399,29 @@ export class InputHandler {
   }
 
   /**
+   * Resolve the ASCII code point for a printable key press, shift-aware.
+   *
+   * Punctuation and digit keys always resolve through the physical
+   * event.code map: macOS reports unreliable event.key values for
+   * modifier combos (Ctrl+Shift+Period → "." instead of ">") and Option
+   * combinations compose non-ASCII glyphs (Alt+Shift+, → "„"). Letters
+   * use event.key directly (browsers report those reliably, including
+   * under Shift).
+   * Returns undefined when no ASCII character is resolvable.
+   */
+  private resolveAsciiCodePoint(event: KeyboardEvent): number | undefined {
+    const pair = PUNCTUATION_CODE_POINTS[event.code];
+    if (pair) {
+      return (event.shiftKey ? pair[1] : pair[0]).codePointAt(0);
+    }
+    if (event.key.length === 1) {
+      const cp = event.key.codePointAt(0);
+      if (cp !== undefined && cp >= 32 && cp <= 126) return cp;
+    }
+    return undefined;
+  }
+
+  /**
    * Try to encode a key event using kitty CSI-u grammar.
    *
    * Called only when the program has pushed kitty keyboard enhancement
@@ -409,10 +464,12 @@ export class InputHandler {
     }
 
     // Single printable character
-    if (event.key.length === 1) {
-      const cp = event.key.codePointAt(0);
-      if (cp === undefined || cp < 32 || cp > 126) return false;
-      const isLetter = /^[a-zA-Z]$/.test(event.key);
+    if (event.key.length === 1 || PUNCTUATION_CODE_POINTS[event.code]) {
+      // event.key may be a composed non-ASCII glyph on macOS (Alt combos);
+      // resolve the physical key's real ASCII code point instead.
+      const cp = this.resolveAsciiCodePoint(event);
+      if (cp === undefined) return false;
+      const isLetter = event.key.length === 1 && /^[a-zA-Z]$/.test(event.key);
 
       // Super + any printable (letters, digits, punctuation)
       if (event.metaKey) {
