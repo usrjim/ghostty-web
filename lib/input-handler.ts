@@ -484,7 +484,7 @@ export class InputHandler {
         let param = 9;
         if (event.altKey) param += 2;
         if (event.ctrlKey) param += 4;
-        this.emitKitty(cp, param, event);
+        this.emitKittySuper(cp, event, param);
         return true;
       }
 
@@ -510,6 +510,42 @@ export class InputHandler {
     event.preventDefault();
     this.onDataCallback(seq);
     this.recordKeyDownData(seq);
+  }
+
+  /**
+   * Emit a kitty super CSI-u sequence in the report-alternate-keys form:
+   * CSI <codepoint>:<shifted-codepoint> ; <mods> u.
+   *
+   * The sub-parameter form is required for tunneling through tmux:
+   * tmux (3.5a tty-keys.c) aliases kitty's super modifier bit onto its
+   * META flag and re-encodes plain CSI-u at the pane — turning
+   * \e[102;9u into \e[102;3u (M-f). tmux's input parser only accepts
+   * digits and ';' before the terminator, so a sub-parameter is
+   * unclassifiable and the sequence passes through verbatim to the
+   * pane, where kitty-aware decoders parse it natively (kkp itself
+   * requests report-alternate-keys; explicit CSI-u decoders bind the
+   * exact sequence).
+   */
+  private emitKittySuper(cp: number, event: KeyboardEvent, param = 9): void {
+    let seq = `\x1b[${cp}`;
+    const shifted = this.superAlternateCodePoint(event);
+    if (shifted !== undefined && shifted !== cp) seq += `:${shifted}`;
+    seq += `;${param}u`;
+    event.preventDefault();
+    this.onDataCallback(seq);
+    this.recordKeyDownData(seq);
+  }
+
+  /**
+   * Shifted ASCII codepoint for a printable key, resolved from the
+   * physical code: punctuation/digit pairs, uppercase for Key* letters.
+   * Returns undefined when no shifted variant exists.
+   */
+  private superAlternateCodePoint(event: KeyboardEvent): number | undefined {
+    const pair = PUNCTUATION_CODE_POINTS[event.code];
+    if (pair) return pair[1].codePointAt(0);
+    if (event.code.startsWith('Key')) return event.code.slice(3, 4).codePointAt(0);
+    return undefined;
   }
 
   /**
@@ -567,19 +603,28 @@ export class InputHandler {
       return;
     }
 
-    // Super (Cmd) + printable key with no kitty flags: suppress entirely.
-    // With flags active the kitty path above already emitted CSI-u
-    // (`\e[<codepoint>;9u`); with the protocol inactive, legacy encoding
-    // cannot express Super, so swallow the key (and its browser default,
-    // e.g. Cmd+F find) instead of letting the core encoder drop the
-    // modifier and type the bare letter.
+    // Super (Cmd) + printable key with no kitty flags: emit the kitty
+    // super CSI-u in the report-alternate-keys form
+    // (`\e[<cp>:<shifted>;9u`), the same unconditional-CSI-u approach
+    // as the Shift+Enter intercept. Legacy encoding cannot express
+    // Super, so the alternative is emitting nothing; the well-formed
+    // sequence is harmless to non-kitty programs (ignored like any
+    // unknown CSI). See emitKittySuper for why the sub-parameter form
+    // matters under tmux.
     if (
       event.metaKey &&
       !event.ctrlKey &&
       !event.altKey &&
       event.key.length === 1
     ) {
-      event.preventDefault();
+      const cp = this.resolveAsciiCodePoint(event);
+      if (cp !== undefined) {
+        this.emitKittySuper(cp, event);
+      } else {
+        // Non-ASCII printable with Super: swallow rather than let the
+        // browser default through.
+        event.preventDefault();
+      }
       return;
     }
 
@@ -706,23 +751,25 @@ export class InputHandler {
       // This helps the encoder produce correct control sequences (e.g., Ctrl+A = 0x01)
       // For special keys (Enter, Arrow keys, etc.), don't pass utf8
       let utf8: string | undefined;
-      if (event.key.length === 1 && event.key.charCodeAt(0) < 128) {
+      const pair = PUNCTUATION_CODE_POINTS[event.code];
+      if (pair) {
+        // Punctuation and digit keys ALWAYS resolve through the physical
+        // event.code map (same policy as resolveAsciiCodePoint): macOS
+        // reports unreliable event.key values for modifier combos —
+        // Ctrl+Shift+Period reports "." not ">" — which would otherwise
+        // encode C-. instead of C->.
+        utf8 = event.shiftKey ? pair[1] : pair[0];
+      } else if (event.key.length === 1 && event.key.charCodeAt(0) < 128) {
         // Ctrl translation needs the lowercase base (Ctrl+A = 0x01);
         // without Ctrl, keep the shift case so Alt+Shift+F encodes
         // \eF rather than collapsing to \ef.
         utf8 = !event.ctrlKey && event.shiftKey ? event.key : event.key.toLowerCase();
-      } else {
-        // Composed non-ASCII glyph (macOS Option+F reports "ƒ"): the core
-        // encoder's legacy translation needs an ASCII base character, so
-        // resolve it from the physical key code — composition-proof and
-        // shift-aware, mirroring resolveAsciiCodePoint for the kitty path.
-        const pair = PUNCTUATION_CODE_POINTS[event.code];
-        if (pair) {
-          utf8 = event.shiftKey ? pair[1] : pair[0];
-        } else if (event.code.startsWith('Key')) {
-          const base = event.code.slice(3, 4);
-          utf8 = event.shiftKey ? base.toUpperCase() : base.toLowerCase();
-        }
+      } else if (event.code.startsWith('Key')) {
+        // Composed letter glyph (macOS Option+F reports "ƒ"): resolve the
+        // ASCII base from the physical key code — composition-proof and
+        // shift-aware.
+        const base = event.code.slice(3, 4);
+        utf8 = event.shiftKey ? base.toUpperCase() : base.toLowerCase();
       }
 
       const encoded = this.encoder.encode({
