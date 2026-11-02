@@ -254,9 +254,9 @@ export class InputHandler {
    * @param mouseConfig - Optional mouse tracking configuration
    * @param getKittyFlags - Optional callback returning active kitty keyboard
    *   protocol enhancement flags (0 = protocol inactive). When non-zero, keys
-   *   that would otherwise emit legacy `\x1b[1;NX` sequences emit kitty
-   *   CSI-u grammar instead, which kitty-protocol-aware programs (emacs
-   *   kkp-mode, nvim) can decode.
+   *   that would otherwise emit the core encoder's legacy sequences emit
+   *   kitty CSI-u grammar instead, which kitty-protocol-aware programs
+   *   (emacs kkp-mode, nvim) can decode.
    */
   constructor(
     ghostty: Ghostty,
@@ -272,6 +272,11 @@ export class InputHandler {
     getKittyFlags?: () => number
   ) {
     this.encoder = ghostty.createKeyEncoder();
+    // Alt-modified keys use the standard ESC-prefix legacy encoding
+    // (DEC mode 1036), matching native terminal defaults. The core
+    // encoder owns all legacy alt encodings now that the hand-mapped
+    // JS sequences are gone.
+    this.encoder.setOption(KeyEncoderOption.ALT_ESC_PREFIX, true);
     this.container = container;
     this.inputElement = inputElement;
     this.onDataCallback = onData;
@@ -388,11 +393,13 @@ export class InputHandler {
    * @returns true if printable character
    */
   private isPrintableCharacter(event: KeyboardEvent): boolean {
-    // If Ctrl, Alt, or Meta (Cmd on Mac) is pressed, it's not a simple printable character
-    // Exception: AltGr (Ctrl+Alt on some keyboards) can produce printable characters
-    if (event.ctrlKey && !event.altKey) return false;
-    if (event.altKey && !event.ctrlKey) return false;
-    if (event.metaKey) return false; // Cmd key on Mac
+    // Any Ctrl/Alt/Meta modifier makes this a modified key combination,
+    // not text: it must reach the core encoder for standard legacy
+    // encoding. This also prevents composed non-ASCII characters
+    // (macOS Option+F → "ƒ") from leaking into the program's input.
+    // Trade-off: layouts that compose text via Ctrl+Alt (Windows AltGr)
+    // would need separate handling; not a target platform here.
+    if (event.ctrlKey || event.altKey || event.metaKey) return false;
 
     // If key produces a single printable character
     return event.key.length === 1;
@@ -426,8 +433,8 @@ export class InputHandler {
    *
    * Called only when the program has pushed kitty keyboard enhancement
    * flags (tracked from terminal output). Such programs (emacs kkp-mode,
-   * nvim) intercept CSI prefixes and cannot parse the legacy `\x1b[1;NX`
-   * sequences emitted by the branches below.
+   * nvim) intercept CSI prefixes and cannot parse the legacy sequences
+   * emitted by the branches below.
    *
    * Handled here (returns true):
    * - Super (Cmd) + any single printable character  → CSI <cp> ; 9 u
@@ -437,7 +444,8 @@ export class InputHandler {
    * Not handled (returns false, falls through to existing paths):
    * - Ctrl + letter: wasm encoder already emits disambiguated CSI-u
    *   (e.g. Ctrl+M → \e[109;5u), which kitty programs parse natively
-   * - Alt + letter: ESC + char branch handles it
+   * - Alt + letter: the core encoder emits the standard ESC + char
+   *   legacy form
    * - Unmodified keys and other special keys
    *
    * Modifier parameter is kitty-spec: 1 + (shift=1 | alt=2 | ctrl=4 |
@@ -540,109 +548,10 @@ export class InputHandler {
 
     // Kitty keyboard protocol active: the program pushed enhancement flags
     // (emacs kkp-mode, nvim) and intercepts CSI prefixes, expecting CSI-u
-    // grammar. Emit kitty-style sequences instead of the legacy `\x1b[1;NX`
-    // forms further below, which such programs cannot parse.
+    // grammar. Emit kitty-style sequences instead of the core encoder's
+    // legacy forms further below, which such programs cannot parse.
     const kittyFlags = this.getKittyFlagsCallback?.() ?? 0;
     if (kittyFlags !== 0 && this.tryEmitKittySequence(event)) {
-      return;
-    }
-
-    // Super+<letter>
-    if (
-      event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      event.code.startsWith('Key') &&
-      event.key.length === 1 &&
-      /^[a-z]$/.test(event.key)
-    ) {
-      // Always send lowercase letter for the escape sequence
-      const letter = event.key.toLowerCase();
-      const seq = `\x1b[1;7${letter}`;
-      event.preventDefault();
-      this.onDataCallback(seq);
-      this.recordKeyDownData(seq);
-      return;
-    }
-
-    // Ctrl+/
-    if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Slash') {
-      const seq = '\x1b[1;5/';
-      event.preventDefault();
-      this.onDataCallback(seq);
-      this.recordKeyDownData(seq);
-      return;
-    }
-
-    // Ctrl+<
-    if (event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && event.code === 'Comma') {
-      const seq = '\x1b[1;5<';
-      event.preventDefault();
-      this.onDataCallback(seq);
-      this.recordKeyDownData(seq);
-      return;
-    }
-
-    // Ctrl+>
-    if (event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && event.code === 'Period') {
-      const seq = '\x1b[1;5>';
-      event.preventDefault();
-      this.onDataCallback(seq);
-      this.recordKeyDownData(seq);
-      return;
-    }
-
-    // Ctrl+,
-    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.code === 'Comma') {
-      const seq = '\x1b[1;5,';
-      event.preventDefault();
-      this.onDataCallback(seq);
-      this.recordKeyDownData(seq);
-      return;
-    }
-
-    // Ctrl+<tab>
-    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.code === 'Tab') {
-      const seq = '\x1b[1;5I';
-      event.preventDefault();
-      this.onDataCallback(seq);
-      this.recordKeyDownData(seq);
-      return;
-    }
-
-    // Alt+<
-    if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === 'Comma') {
-      const seq = '\x1b[1;3<';
-      event.preventDefault();
-      this.onDataCallback(seq);
-      this.recordKeyDownData(seq);
-      return;
-    }
-
-    // Alt+>
-    if (event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === 'Period') {
-      const seq = '\x1b[1;3>';
-      event.preventDefault();
-      this.onDataCallback(seq);
-      this.recordKeyDownData(seq);
-      return;
-    }
-
-    // Alt+/
-    if (event.altKey && !event.ctrlKey && !event.metaKey && event.code === 'Slash') {
-      const seq = '\x1b[1;3/';
-      event.preventDefault();
-      this.onDataCallback(seq);
-      this.recordKeyDownData(seq);
-      return;
-    }
-
-    // Alt+Backslash (M-\)
-    if (event.altKey && !event.ctrlKey && !event.metaKey && event.code === 'Backslash') {
-      const seq = '\x1b[1;3\\';
-      event.preventDefault();
-      this.onDataCallback(seq);
-      this.recordKeyDownData(seq);
       return;
     }
 
@@ -658,22 +567,19 @@ export class InputHandler {
       return;
     }
 
-    // Special handling for Alt (Option) on macOS: send ESC + base character for Alt+Key combos
+    // Super (Cmd) + printable key with no kitty flags: suppress entirely.
+    // With flags active the kitty path above already emitted CSI-u
+    // (`\e[<codepoint>;9u`); with the protocol inactive, legacy encoding
+    // cannot express Super, so swallow the key (and its browser default,
+    // e.g. Cmd+F find) instead of letting the core encoder drop the
+    // modifier and type the bare letter.
     if (
-      event.altKey &&
+      event.metaKey &&
       !event.ctrlKey &&
-      !event.metaKey &&
-      event.code.startsWith('Key') &&
+      !event.altKey &&
       event.key.length === 1
     ) {
-      // Map event.code 'KeyB' to 'b' or 'B' depending on shift
-      const baseChar = event.shiftKey
-        ? event.code.slice(3, 4).toUpperCase()
-        : event.code.slice(3, 4).toLowerCase();
-      const escSeq = '\x1b' + baseChar;
       event.preventDefault();
-      this.onDataCallback(escSeq);
-      this.recordKeyDownData(escSeq);
       return;
     }
 
@@ -799,10 +705,25 @@ export class InputHandler {
       // For letter/number keys, even with modifiers, pass the base character
       // This helps the encoder produce correct control sequences (e.g., Ctrl+A = 0x01)
       // For special keys (Enter, Arrow keys, etc.), don't pass utf8
-      const utf8 =
-        event.key.length === 1 && event.key.charCodeAt(0) < 128
-          ? event.key.toLowerCase() // Use lowercase for consistency
-          : undefined;
+      let utf8: string | undefined;
+      if (event.key.length === 1 && event.key.charCodeAt(0) < 128) {
+        // Ctrl translation needs the lowercase base (Ctrl+A = 0x01);
+        // without Ctrl, keep the shift case so Alt+Shift+F encodes
+        // \eF rather than collapsing to \ef.
+        utf8 = !event.ctrlKey && event.shiftKey ? event.key : event.key.toLowerCase();
+      } else {
+        // Composed non-ASCII glyph (macOS Option+F reports "ƒ"): the core
+        // encoder's legacy translation needs an ASCII base character, so
+        // resolve it from the physical key code — composition-proof and
+        // shift-aware, mirroring resolveAsciiCodePoint for the kitty path.
+        const pair = PUNCTUATION_CODE_POINTS[event.code];
+        if (pair) {
+          utf8 = event.shiftKey ? pair[1] : pair[0];
+        } else if (event.code.startsWith('Key')) {
+          const base = event.code.slice(3, 4);
+          utf8 = event.shiftKey ? base.toUpperCase() : base.toLowerCase();
+        }
+      }
 
       const encoded = this.encoder.encode({
         action,
